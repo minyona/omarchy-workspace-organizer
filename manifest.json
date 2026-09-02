@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "minyona.workspaces",
+  "name": "Workspace Organizer",
+  "version": "0.2.0",
+  "author": "Michael Mignogna",
+  "description": "Keyboard-driven workspace switcher and reorderer",
+  "kinds": [
+    "overlay",
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Workspaces.qml",
+    "service": "Service.qml"
+  }
+}
