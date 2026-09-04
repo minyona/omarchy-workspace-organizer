@@ -97,8 +97,8 @@ For the common case — "I'm on this workspace and I want it further left" —
 there is a faster path that skips the deck entirely:
 
 **`SUPER+SHIFT+\``** enters the mode. **`←` / `→`** then moves the workspace you
-are on one slot, applied immediately, and works whether or not you are still
-holding `SHIFT` from the entry chord. **`Esc`** or **`↵`** leaves.
+are on one slot, applied immediately, whatever you are still holding down from
+the entry chord. **`Esc`** or **`↵`** leaves.
 
 This is a Hyprland *submap*, which is what buys us bare arrow keys: every
 `SUPER`+arrow chord is already taken by Omarchy's window, group, and monitor
@@ -110,55 +110,44 @@ It is deliberately **not** bound to plain `SHIFT+\``, which is how you type
 The move logic (`workspace-shift.lua`) runs as a Lua keybinding function
 *inside the compositor*, so a shift costs no subprocess at all.
 
-Move mode is opt-in. Paste this into `~/.config/hypr/bindings.lua`:
+Move mode is opt-in. Add this to `~/.config/hypr/bindings.lua`:
 
 ```lua
--- Workspace Organizer: move mode.
---
--- Guarded load: a bare dofile on a missing file raises, and an error partway
+-- Guarded: a bare dofile on a missing file raises, and an error partway
 -- through bindings.lua takes every binding after it down with it.
 local ok, ws = pcall(dofile, os.getenv("HOME")
   .. "/.config/omarchy/plugins/minyona.workspaces/workspace-shift.lua")
-
-if ok and ws then
-  local function move(delta)
-    return function()
-      local moved, info = ws.shift(delta)
-      hl.notification.create({
-        text = moved and ("workspace moved to slot " .. info) or tostring(info),
-        timeout = 1400,
-      })
-    end
-  end
-
-  local function leave()
-    hl.dispatch(hl.dsp.submap("reset"))
-  end
-
-  hl.define_submap("workspace-move", function()
-    hl.bind("left",  move(-1))
-    hl.bind("right", move(1))
-    -- Shifted variants, so keeping SHIFT held from the entry chord still
-    -- moves rather than silently doing nothing.
-    hl.bind("SHIFT + left",  move(-1))
-    hl.bind("SHIFT + right", move(1))
-    hl.bind("escape", leave)
-    hl.bind("return", leave)
-  end)
-
-  -- code:49 is the physical ` key. Bound by keycode rather than keysym because
-  -- with SHIFT held that key reports "asciitilde", not "grave", so a keysym
-  -- bind on GRAVE can never match. Omarchy binds its own number row the same
-  -- way (code:10 is workspace 1).
-  o.bind("SUPER + SHIFT + code:49", "Move workspace (arrows)", function()
-    hl.dispatch(hl.dsp.submap("workspace-move"))
-    hl.notification.create({ text = "MOVE MODE  ←/→ move  Esc exit", timeout = 1400 })
-  end)
-end
+if ok and ws then ws.setup() end
 ```
 
-The submap binds only the six keys above. Anything else is swallowed while the
-mode is active, so `Esc` is how you get out.
+That is the whole integration. The submap and every binding inside it live in
+the plugin, so a fix here reaches you on `omarchy plugin update` rather than
+sitting frozen in whatever you pasted the day you installed.
+
+`setup()` takes an options table:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `key` | `"SUPER + SHIFT + code:49"` | the chord that enters the mode |
+| `description` | `"Move workspace (arrows)"` | label in `omarchy menu keybindings --print` |
+| `submap` | `"workspace-move"` | submap name, if it collides with one of yours |
+| `notify` | `true` | toast on entry and after each move |
+| `exit_on_unknown` | `false` | any unbound key leaves the mode instead of being swallowed |
+
+```lua
+ws.setup({ key = "SUPER + M", notify = false })
+```
+
+It returns `true`, or `false` and a reason. An unrecognised option name is an
+error rather than a silent no-op, because a mistyped `key` otherwise looks
+exactly like the plugin having failed to load.
+
+The arrows, `Esc` and `↵` are each bound four times inside the submap, once per
+combination of `SUPER` and `SHIFT` that can still be held down from the entry
+chord. Hyprland matches a bind's modifier mask exactly, so a bare `left` bind
+never sees the `SUPER+SHIFT+Left` you actually press, and the mode sits there
+active while looking dead. The binds are scoped to the submap, so `SUPER+Left`
+keeps its normal meaning everywhere else.
 
 ### IPC
 
@@ -219,12 +208,16 @@ row the overlay showed you.
   moved into it. This is only visible if you have used `SUPER+L` to pin layouts.
 - Editing the plugin while it is installed needs `omarchy restart shell` —
   `keepLoaded: true` keeps the old instance alive through the inotify reload.
-- **Move mode is copy-pasted, not linked.** The snippet hardcodes the plugin's
-  install path and lives in your config, so it does not update when the plugin
-  does, and uninstalling leaves it behind. The `pcall` makes that harmless: the
-  load fails, the bindings are skipped, and the rest of `bindings.lua` still
-  runs. It also means a genuine error in the plugin file looks exactly like the
-  plugin not being installed.
+- **The move-mode loader hardcodes the install path**, so uninstalling the
+  plugin leaves four dead lines in your `bindings.lua`. The `pcall` makes that
+  harmless: the load fails, `setup()` is skipped, and the rest of the file still
+  runs. The cost is that a genuine error inside the plugin looks exactly like
+  the plugin not being installed.
+- **Move mode swallows unbound keys** by default. Entering the mode and
+  forgetting looks like a dead keyboard until you press `Esc`. Pass
+  `exit_on_unknown = true` to `setup()` for the friendlier behaviour; it is off
+  by default only because Hyprland's catchall bind is untested on setups other
+  than the author's.
 
 ## Development
 
