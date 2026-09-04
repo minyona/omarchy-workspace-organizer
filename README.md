@@ -38,7 +38,7 @@ This reorders with **insert semantics**: moving 3 to the front turns
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-workspace-organizer --enable
+omarchy plugin add https://github.com/minyona/omarchy-workspace-organizer --enable
 ```
 
 Then bind a key in `~/.config/hypr/bindings.lua`:
