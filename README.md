@@ -84,12 +84,23 @@ not something this plugin keeps on the side.
 | Key | Action |
 |---|---|
 | `↑` / `↓` | select |
-| `⇧↑` / `⇧↓` | move the selected workspace up / down the order |
+| `⇧` (held) | pick the selected workspace up |
+| `⇧↑` / `⇧↓` | move the held workspace up / down the order |
 | `1`–`9` | jump the cursor to that slot |
 | `Home` / `End` | first / last |
 | `⌫` | discard staged changes, stay open |
 | `⏎` | commit the reorder, then focus the selected workspace |
 | `Esc` | cancel — nothing is applied |
+
+Holding `⇧` picks the selected row up before it moves anywhere. The row lifts
+off the list with a shadow under it, its outline sharpens, the `▸` cursor
+becomes `⇕`, and the footer shifts its emphasis from `SELECT` to `MOVE`. Let go
+and it settles back down.
+
+Nothing about the order changes on the way in or out of that state. The lift
+exists to answer one question: the arrow keys do two different things depending
+on whether `⇧` is down, and without it there was nothing on screen that said
+which one you were about to get.
 
 ### Move mode (no overlay)
 

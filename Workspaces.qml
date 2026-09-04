@@ -17,6 +17,12 @@ Item {
   property bool opened: false
   property int selectedIndex: 0
 
+  // True while SHIFT is held down. Arrows select normally and move the
+  // workspace while SHIFT is down, and nothing on screen said which one the
+  // next arrow would do. The selected row lifts out of the list to say the
+  // workspace is in your hand now, and settles back when you let go.
+  property bool grabbed: false
+
   // The staged model. `snapshot` is live state frozen at open time;
   // `stagedOrder` lists workspace ids in the order the user wants them.
   // Reordering only ever touches stagedOrder -- Hyprland is untouched until
@@ -53,6 +59,9 @@ Item {
     root.opened = true
     root.applying = false
     root.errorText = ""
+    // A grab never survives a close: the key release lands somewhere else once
+    // the overlay is gone, so it would otherwise reopen still holding.
+    root.grabbed = false
     // Rows appear immediately from the reactive workspace model; window
     // details arrive a few milliseconds later from hyprctl.
     root.refreshSnapshot()
@@ -63,6 +72,7 @@ Item {
 
   function close() {
     root.opened = false
+    root.grabbed = false
   }
 
   function dismiss() {
@@ -268,18 +278,27 @@ Item {
   component KeyCap: Row {
     property string keyText: ""
     property string label: ""
+    // `active` lights the chip that the arrows are about to obey; `dimmed`
+    // retires the one they are not. Between them the footer answers the only
+    // question a held SHIFT raises: which of these two is live right now.
+    property bool active: false
+    property bool dimmed: false
 
     spacing: Style.space(5)
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+
+    opacity: dimmed ? 0.35 : 1
+    Behavior on opacity { NumberAnimation { duration: 130 } }
 
     Rectangle {
       anchors.verticalCenter: parent.verticalCenter
       width: capText.implicitWidth + Style.space(9)
       height: capText.implicitHeight + Style.space(5)
       radius: Style.space(2)
-      color: Util.alpha(root.accent, 0.12)
+      color: Util.alpha(root.accent, active ? 0.34 : 0.12)
       border.width: 1
-      border.color: Util.alpha(root.accent, 0.45)
+      border.color: Util.alpha(root.accent, active ? 0.95 : 0.45)
+      Behavior on color { ColorAnimation { duration: 130 } }
 
       Text {
         id: capText
@@ -298,7 +317,8 @@ Item {
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
       font.letterSpacing: 1
-      color: root.muted
+      font.bold: active
+      color: active ? root.accent : root.muted
     }
   }
 
@@ -341,8 +361,31 @@ Item {
         focus: true
 
         Keys.priority: Keys.BeforeItem
+
+        // SHIFT is tracked as a key in its own right, not just read off the
+        // modifier mask of some other press, so the lift happens the moment it
+        // goes down rather than on the first arrow after it.
+        Keys.onReleased: function(event) {
+          if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
+            root.grabbed = false
+            event.accepted = true
+          }
+        }
+
         Keys.onPressed: function(event) {
           var shifted = (event.modifiers & Qt.ShiftModifier) !== 0
+
+          // Qt reports the modifier state as it was *before* this press, so the
+          // SHIFT press itself does not carry ShiftModifier and has to be
+          // matched by key. Every other press then resyncs from the mask, which
+          // repairs the state if a release was ever missed (the overlay losing
+          // focus mid-grab, most likely).
+          if (event.key === Qt.Key_Shift) {
+            root.grabbed = true
+            event.accepted = true
+            return
+          }
+          root.grabbed = shifted
 
           if (event.key === Qt.Key_Escape) {
             root.dismiss()
@@ -506,6 +549,9 @@ Item {
               readonly property bool current: index === root.selectedIndex
               // The workspace's live id differs from the slot it would land in.
               readonly property bool moved: modelData !== (index + 1)
+              // Held, not merely selected. Only the row you could move right
+              // now is allowed to look picked up.
+              readonly property bool lifted: current && root.grabbed
 
               // App classes on the primary line, the first window's title
               // beneath it — suppressed when it would just repeat the line above.
@@ -528,139 +574,190 @@ Item {
               width: list.width
               height: root.rowHeight
 
-              // Outer bloom, then the row fill — a blur-free glow built from
-              // two stacked translucent accents.
+              // Cast shadow, left behind on the list surface while the body
+              // above it rises. No blur is available here, so the softness is
+              // two offset plates: a wider faint one under a tighter darker one.
               Rectangle {
                 anchors.fill: parent
-                anchors.margins: -Style.space(3)
+                anchors.topMargin: Style.space(7)
+                anchors.bottomMargin: -Style.space(7)
+                anchors.leftMargin: Style.space(6)
+                anchors.rightMargin: Style.space(6)
                 radius: Style.space(5)
-                color: Util.alpha(root.accent, 0.07)
-                visible: wsRow.current
+                color: "#000000"
+                opacity: wsRow.lifted ? 0.20 : 0
+                Behavior on opacity { NumberAnimation { duration: 130 } }
               }
               Rectangle {
                 anchors.fill: parent
-                radius: Style.space(3)
-                color: wsRow.current ? Util.alpha(root.accent, 0.14) : "transparent"
+                anchors.topMargin: Style.space(4)
+                anchors.bottomMargin: -Style.space(4)
+                anchors.leftMargin: Style.space(2)
+                anchors.rightMargin: Style.space(2)
+                radius: Style.space(4)
+                color: "#000000"
+                opacity: wsRow.lifted ? 0.30 : 0
+                Behavior on opacity { NumberAnimation { duration: 130 } }
               }
 
-              // Accent spine on the selected row — the cyberpunk "cursor".
-              Rectangle {
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                width: Style.space(3)
-                height: parent.height * (wsRow.current ? 0.78 : 0.3)
-                radius: width
-                color: wsRow.current ? root.accent : root.border
-                opacity: wsRow.current ? 1 : 0.22
-                Behavior on height { NumberAnimation { duration: 90 } }
-              }
-
-              Row {
+              // Everything above the shadow. The lift is a transform rather
+              // than a y offset because the Column owns the layout: a row that
+              // genuinely moved would shove its neighbours down the list.
+              Item {
+                id: rowBody
                 anchors.fill: parent
-                anchors.leftMargin: Style.space(13)
-                anchors.rightMargin: Style.space(10)
-                spacing: Style.space(9)
 
-                // Selection chevron in its own gutter, so the slot address
-                // never shifts horizontally as the cursor moves.
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(11)
-                  text: wsRow.current ? "▸" : ""
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                  color: root.accent
+                transform: Translate {
+                  y: wsRow.lifted ? -Style.space(4) : 0
+                  // OutBack overshoots a little on the way up, which is what
+                  // makes it read as picked up rather than nudged.
+                  Behavior on y {
+                    NumberAnimation { duration: 140; easing.type: Easing.OutBack }
+                  }
                 }
 
-                // Slot address: [01]. Brackets stay muted so the digits read.
-                Row {
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: 0
+                // Outer bloom, then the row fill — a blur-free glow built from
+                // two stacked translucent accents. Holding the row spreads the
+                // bloom and outlines the fill, so it stops reading as a
+                // highlighted band and starts reading as a detached object.
+                Rectangle {
+                  anchors.fill: parent
+                  anchors.margins: wsRow.lifted ? -Style.space(6) : -Style.space(3)
+                  radius: Style.space(5)
+                  color: Util.alpha(root.accent, wsRow.lifted ? 0.13 : 0.07)
+                  visible: wsRow.current
+                }
+                Rectangle {
+                  anchors.fill: parent
+                  radius: Style.space(3)
+                  color: wsRow.current ? Util.alpha(root.accent, wsRow.lifted ? 0.22 : 0.14)
+                                       : "transparent"
+                  border.width: wsRow.lifted ? Math.max(1, Style.space(1)) : 0
+                  border.color: Util.alpha(root.accent, 0.75)
+                }
 
+                // Accent spine on the selected row — the cyberpunk "cursor".
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: wsRow.lifted ? Style.space(4) : Style.space(3)
+                  height: parent.height * (wsRow.lifted ? 0.94 : (wsRow.current ? 0.78 : 0.3))
+                  radius: width
+                  color: wsRow.current ? root.accent : root.border
+                  opacity: wsRow.current ? 1 : 0.22
+                  Behavior on width { NumberAnimation { duration: 130 } }
+                  Behavior on height { NumberAnimation { duration: 90 } }
+                }
+
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(13)
+                  anchors.rightMargin: Style.space(10)
+                  spacing: Style.space(9)
+
+                  // Selection chevron in its own gutter, so the slot address
+                  // never shifts horizontally as the cursor moves.
                   Text {
-                    text: "["
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.subtitle
-                    color: Util.alpha(root.muted, 0.7)
-                  }
-                  Text {
-                    text: (wsRow.index + 1 < 10 ? "0" : "") + (wsRow.index + 1)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(11)
+                    // ▸ points at the selection. ⇕ says the arrows are about
+                    // to move this row rather than walk past it.
+                    text: wsRow.lifted ? "⇕" : (wsRow.current ? "▸" : "")
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.subtitle
                     font.bold: true
-                    color: wsRow.current ? root.accent : root.foreground
-                  }
-                  Text {
-                    text: "]"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.subtitle
-                    color: Util.alpha(root.muted, 0.7)
-                  }
-                }
-
-                Column {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: parent.width - Style.space(95) - fromTag.width
-                  spacing: Style.space(2)
-
-
-                  Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: wsRow.primaryText
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    color: wsRow.entry.windows.length ? root.foreground : root.muted
-                    opacity: wsRow.entry.windows.length ? 1 : 0.55
+                    color: root.accent
                   }
 
+                  // Slot address: [01]. Brackets stay muted so the digits read.
+                  Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+
+                    Text {
+                      text: "["
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.subtitle
+                      color: Util.alpha(root.muted, 0.7)
+                    }
+                    Text {
+                      text: (wsRow.index + 1 < 10 ? "0" : "") + (wsRow.index + 1)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.subtitle
+                      font.bold: true
+                      color: wsRow.current ? root.accent : root.foreground
+                    }
+                    Text {
+                      text: "]"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.subtitle
+                      color: Util.alpha(root.muted, 0.7)
+                    }
+                  }
+
+                  Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - Style.space(95) - fromTag.width
+                    spacing: Style.space(2)
+
+
+                    Text {
+                      width: parent.width
+                      elide: Text.ElideRight
+                      text: wsRow.primaryText
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      color: wsRow.entry.windows.length ? root.foreground : root.muted
+                      opacity: wsRow.entry.windows.length ? 1 : 0.55
+                    }
+
+                    Text {
+                      width: parent.width
+                      elide: Text.ElideRight
+                      visible: wsRow.subText !== ""
+                      text: wsRow.subText
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      color: Util.alpha(root.muted, 0.85)
+                    }
+                  }
+
+                  // Only the row being moved explains where it came from. Showing
+                  // this on every displaced row turns the deck into a wall of
+                  // competing numbers, which is exactly what it should not be.
                   Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    visible: wsRow.subText !== ""
-                    text: wsRow.subText
+                    id: fromTag
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: (wsRow.current && wsRow.moved) ? Style.space(52) : 0
+                    visible: wsRow.current && wsRow.moved
+                    text: "from " + wsRow.modelData
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
-                    color: Util.alpha(root.muted, 0.85)
+                    color: Util.alpha(root.muted, 0.9)
                   }
-                }
 
-                // Only the row being moved explains where it came from. Showing
-                // this on every displaced row turns the deck into a wall of
-                // competing numbers, which is exactly what it should not be.
-                Text {
-                  id: fromTag
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: (wsRow.current && wsRow.moved) ? Style.space(52) : 0
-                  visible: wsRow.current && wsRow.moved
-                  text: "from " + wsRow.modelData
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Util.alpha(root.muted, 0.9)
-                }
-
-                // Window count as a right-aligned micro-cap readout.
-                Row {
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(5)
-
-                  Text {
+                  // Window count as a right-aligned micro-cap readout.
+                  Row {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: wsRow.entry.windows.length ? String(wsRow.entry.windows.length) : "—"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                    color: wsRow.entry.windows.length ? root.foreground : root.muted
-                  }
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: wsRow.entry.windows.length > 0
-                    text: "WIN"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.letterSpacing: 1
-                    color: Util.alpha(root.muted, 0.8)
+                    spacing: Style.space(5)
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: wsRow.entry.windows.length ? String(wsRow.entry.windows.length) : "—"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                      color: wsRow.entry.windows.length ? root.foreground : root.muted
+                    }
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      visible: wsRow.entry.windows.length > 0
+                      text: "WIN"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.letterSpacing: 1
+                      color: Util.alpha(root.muted, 0.8)
+                    }
                   }
                 }
               }
@@ -688,8 +785,11 @@ Item {
             spacing: Style.space(13)
             visible: root.errorText === "" && !root.applying
 
-            KeyCap { keyText: "↑↓";  label: "SELECT" }
-            KeyCap { keyText: "⇧↑↓"; label: "MOVE" }
+            // Labels stay put while SHIFT is held; only the emphasis moves.
+            // Retitling a chip would reflow every chip to its right, which
+            // reads as the footer twitching rather than as an answer.
+            KeyCap { keyText: "↑↓";  label: "SELECT"; dimmed: root.grabbed }
+            KeyCap { keyText: "⇧↑↓"; label: "MOVE";   active: root.grabbed }
             KeyCap { keyText: "1-9"; label: "JUMP" }
             KeyCap { keyText: "⌫";   label: "RESET" }
             KeyCap { keyText: "⏎";   label: "COMMIT" }
