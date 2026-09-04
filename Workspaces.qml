@@ -365,21 +365,35 @@ Item {
         // SHIFT is tracked as a key in its own right, not just read off the
         // modifier mask of some other press, so the lift happens the moment it
         // goes down rather than on the first arrow after it.
+        //
+        // Ending the grab is the harder half. The press arrives as Key_Shift,
+        // but the matching release has been observed arriving under a
+        // different modifier keycode, so matching Key_Shift on the way out
+        // leaves the row stuck in the air. A grab that never ends is far worse
+        // than one that ends a touch eagerly, so any modifier release drops it.
+        readonly property var modifierKeys: [
+          Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_AltGr,
+          Qt.Key_Meta, Qt.Key_Super_L, Qt.Key_Super_R, Qt.Key_CapsLock
+        ]
+
         Keys.onReleased: function(event) {
-          if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
+          if (keyCatcher.modifierKeys.indexOf(event.key) !== -1) {
             root.grabbed = false
             event.accepted = true
           }
         }
 
+        // Losing focus means the release will be delivered somewhere else, and
+        // the row would still be in the air when the overlay came back.
+        onActiveFocusChanged: if (!activeFocus) root.grabbed = false
+
         Keys.onPressed: function(event) {
           var shifted = (event.modifiers & Qt.ShiftModifier) !== 0
 
-          // Qt reports the modifier state as it was *before* this press, so the
-          // SHIFT press itself does not carry ShiftModifier and has to be
-          // matched by key. Every other press then resyncs from the mask, which
-          // repairs the state if a release was ever missed (the overlay losing
-          // focus mid-grab, most likely).
+          // Matched by key, not by mask: that is what makes the lift land on
+          // the SHIFT press itself rather than on the first arrow after it.
+          // Every other press then resyncs from the mask, which repairs the
+          // state if a release is ever missed.
           if (event.key === Qt.Key_Shift) {
             root.grabbed = true
             event.accepted = true
